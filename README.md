@@ -1,6 +1,8 @@
 # HitmanBloodMoney_UnlimitedSaves
 Removes save limit for steam hitman blood money 1.2. 
 
+Edit: For "Pro" difficulty, which has no saves allowed, saving works, but the load menu item needs to be patched. Will update soonish. For hard mode and below, eg the 3 saves or easier, it works fine.
+
 /*
 I wrote this because I want to play harder difficulty in hitman blood money without being limited by saves.
 I do not patch the hitman image on disk because they are using a packer which I'm working on atm; although they do not appear
