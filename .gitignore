@@ -10,6 +10,18 @@
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
+#Custom build output folder
+[Mm]inimalExcess
+
+#logs
+*.tlog
+
+#lastbuildstate
+*.lastbuildstate
+
+#filters
+*.filters
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
