@@ -245,7 +245,11 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="OpCodeWriter.cpp" />
     <ClCompile Include="Patcher.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="OpCodeWriter.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

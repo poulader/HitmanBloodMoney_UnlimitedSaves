@@ -46,18 +46,42 @@ BOOL SetPrivilege(
 	BOOL bEnablePrivilege  // TRUE to enable. FALSE to disable 
 );
 
-//Thread function pointer typedef
-typedef DWORD (WINAPI *THREADPROC)(LPVOID param);
+
 
 //Function was written with a global bool to try this method instead, hence the name
-DWORD doRemoteThreadInstead(DWORD processID, DWORD base, DWORD offset);
+DWORD doRemoteThreadInstead(DWORD processID, const threadArgsList& args);
 
-//Export the thread routine without name mangling so we can easily get its address in our process
-//to copy later
-extern "C"
-{
-	__declspec(dllexport) DWORD WINAPI ourRemoteThread(LPVOID args);
-}
+//The opcode we will write for save patch (unconditional short jmp)
+const uint8_t saveBytesToWrite[]{ 0xEB };
+
+//The opcode we expect at our save offset, jl
+const uint8_t saveBytesToRead[]{ 0x7C };
+
+//xor edx, edx
+//will replace opcodes at load offset, we want the zf active
+const uint8_t loadBytesToWrite[]{ 0x31, 0xFF };
+
+//test dl,dl
+//original instructions at load offset
+const uint8_t loadBytesToRead[]{ 0x84, 0xD2 };
+
+//Ze process name
+const CHAR processName[] = { "HitmanBloodMoney.exe" };
+
+//Once everything has been unpacked, this is the offset from the module base to the jl we want to make jmp for save
+const DWORD saveOpcodeOffset = 0x2776CD;
+
+//Once everything has been unpacked, this is the offset from the module base to the test for load
+const DWORD loadOpcodeOffset = 0x277689;
+
+
+const DWORD maxOpcodeLength = 255;
+const DWORD maxArgListLength = 10;
+const DWORD memToWriteLength = 0x200;
+const DWORD threadFunctLength = 0x45;
+
+//Fill out a threadArgs structure
+int  createThreadArg(DWORD base, DWORD offset, DWORD length, const uint8_t *opcodes, threadArgs& out_args);
 
 int main()
 {
@@ -71,18 +95,6 @@ int main()
 
 	//Some info about the process, image name and ID are what we want
 	PROCESSENTRY32 pe32;
-
-	//The opcode we will write (unconditional short jmp)
-	const uint8_t bytesToWrite[]{ 0xEB };
-
-	//The opcodes we want to find (not using this, left over from RPM attempt, jl and last byte in little endian of offset)
-	const uint8_t bytesToRead[]{ 0x7C, 0x18 };
-
-	//Ze process name
-	const CHAR processName[] = { "HitmanBloodMoney.exe" };
-
-	//Once everything has been unpacked, this is the offset from the module base to the jl we want to make jmp
-	const DWORD opcodeOffset = 0x2776CD;
 
 	SIZE_T nBytesWritten = 0;
 
@@ -198,10 +210,15 @@ int main()
 				break;
 			}
 
-			//Ok we found it, send procID, base address, opcode offset. Leaving them as separate params
-			//in case I get RPM working and can look for the opcodes I want instead of depending on fixed offset
+
+
+			bool isSavePatched = false;
+			bool isLoadPatched = false;
+
+			//need to patch save and load (for pro difficulty)
+
 			DWORD retcode = 0;
-			if ( (retcode =doRemoteThreadInstead(pe32.th32ProcessID, (DWORD)moduleEntry.modBaseAddr, opcodeOffset)))
+			if ( (retcode =doRemoteThreadInstead(pe32.th32ProcessID, (DWORD)moduleEntry.modBaseAddr, saveOpcodeOffset)))
 			{
 				if (retcode != 2)
 					printf("\nRemote thread method failed...\n");
@@ -263,15 +280,6 @@ bool SetDebug()
 
 }
 
-//Earlier I was passing in the address as the thread arg, but I will break them up in case things change
-#pragma pack(push, 4)
-typedef struct threadArgs
-{
-	DWORD base;
-	DWORD offset;
-} threadArgs, *pthreadArgs;
-#pragma pack(pop, 4)
-
 //caged from msdn
 BOOL SetPrivilege(
 	HANDLE hToken,  // token handle 
@@ -301,7 +309,7 @@ BOOL SetPrivilege(
 }
 
 
-DWORD doRemoteThreadInstead(DWORD processID, DWORD base, DWORD offset)
+DWORD doRemoteThreadInstead(DWORD processID, const threadArgsList& args)
 {
 
 	HANDLE hitmanProc = NULL;
@@ -309,11 +317,10 @@ DWORD doRemoteThreadInstead(DWORD processID, DWORD base, DWORD offset)
 	//make sure args are ok
 	if (processID == 0 || processID == (DWORD)INVALID_HANDLE_VALUE)
 		return 1;
-	else if (base == NULL || offset == NULL || (int)base == -1 || (base + offset) > (DWORD)0x7FFFFFFF)
-	{
-		printf("\nInvalid args.\n");
+	else if (args.count == 0 || args.totalLength > maxArgListLength)
 		return 1;
-	}
+	else if (args.totalLength > (memToWriteLength / 2))
+		return 1;
 
 	hitmanProc = OpenProcess(PROCESS_ALL_ACCESS, false, processID);
 
@@ -330,8 +337,31 @@ DWORD doRemoteThreadInstead(DWORD processID, DWORD base, DWORD offset)
 	//grab offset from jmp and add it to exported function address + 5 bytes.
 	//The exported function now directly points to the function, so we can use the address directly.
 
+	//Figure out how much memory we need
+	DWORD totalMemSize = 0;
+
+	//size of opcodes for thread funct
+	totalMemSize += threadFunctLength;
+
+	//size of arguments
+	totalMemSize += args.totalLength;
+
+	//size of argslist struct, we already have the length of the array of threadargs so subtract the size of the array delcaration
+	totalMemSize += (sizeof(threadArgsList) - sizeof(threadArgs));
+
+	//make sure args will be aligned properly after function
+	DWORD padsize = 0;
+
+	padsize = threadFunctLength % 8;
+
+	if (padsize != 0)
+	{
+		totalMemSize += (8 - padsize);
+	}
+
+
 	//Allocate some memory in the hitman process
-	remoteAddr = (HANDLE)VirtualAllocEx(hitmanProc, NULL, 0x100, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+	remoteAddr = (HANDLE)VirtualAllocEx(hitmanProc, NULL, totalMemSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 
 	if (remoteAddr == NULL || remoteAddr == INVALID_HANDLE_VALUE)
 	{
@@ -362,11 +392,11 @@ DWORD doRemoteThreadInstead(DWORD processID, DWORD base, DWORD offset)
 
 	DWORD nBytesWritten = 0;
 
-	uint8_t nullarray[0x100];
+	uint8_t *nullarray = new uint8_t[totalMemSize];
 	ZeroMemory(nullarray, sizeof(nullarray));
 
 	//zero the memory first, if the write fails at this point, I'm not going to try and free it, who cares
-	if (!WriteProcessMemory(hitmanProc, remoteAddr, nullarray, (SIZE_T)sizeof(nullarray), &nBytesWritten))
+	if (!WriteProcessMemory(hitmanProc, remoteAddr, nullarray, totalMemSize, &nBytesWritten))
 	{
 		printf("\nError writing to memory we allocated in hitman process.\n");
 		CloseHandle(hitmanProc);
@@ -383,7 +413,7 @@ DWORD doRemoteThreadInstead(DWORD processID, DWORD base, DWORD offset)
 
 	//Also all automatically generated security things should be disabled or it will try to jmp
 	//to an address that is incorrect in the remote process.
-	if (!WriteProcessMemory(hitmanProc, remoteAddr, (uint8_t*)ptrToFunct, 0x45, &nBytesWritten))
+	if (!WriteProcessMemory(hitmanProc, remoteAddr, (uint8_t*)ptrToFunct, threadFunctLength, &nBytesWritten))
 	{
 		if (nBytesWritten < 0x45)
 		{
@@ -395,20 +425,20 @@ DWORD doRemoteThreadInstead(DWORD processID, DWORD base, DWORD offset)
 
 	DWORD remoteThreadID = 0;
 
-	//Copy over the arguments as well. Originally this was not needed as I passed in the address
-	//as the thread argument directly, but this is more flexible.
-	threadArgs args = { 0 };
-	args.base = base;
-	args.offset = offset;
-
 	//write args to hitman process memory as well
-	HANDLE remoteArgsAddr = (HANDLE)((DWORD)remoteAddr + 0x50);
+	HANDLE remoteArgsAddr = (HANDLE)NULL;
 
 	nBytesWritten = 0;
 
+	//We need to make sure args are written at a qword boundary
+	DWORD padAfterFunct = threadFunctLength % 8;
+	DWORD argsAddr = ((DWORD)remoteAddr + threadFunctLength + (8 - padAfterFunct));
+
+	remoteArgsAddr = (HANDLE)argsAddr;
+
 	//Again if we fail to write to memory we allocated, I'm not going to try and free it.
 
-	if (!WriteProcessMemory(hitmanProc, remoteArgsAddr, (threadArgs*)&args, sizeof(args), &nBytesWritten))
+	if (!WriteProcessMemory(hitmanProc, remoteArgsAddr, (threadArgsList*)&args, totalMemSize - (threadFunctLength + (8 - padAfterFunct)), &nBytesWritten))
 	{
 		printf("\nError writing args.\n");
 		CloseHandle(hitmanProc);
@@ -489,16 +519,6 @@ DWORD WINAPI ourRemoteThread(LPVOID args)
 		return 1;
 	else
 	{
-		//Ok... we are in the address space of the process... verify we are patching the right place
-		DWORD targetAddress = ((threadArgs*)args)->base + ((threadArgs*)args)->offset;
 
-		//Change jl to a short jmp
-		if (*(uint8_t*)targetAddress == 0x7C)
-		{
-			*(uint8_t*)targetAddress = 0xEB;
-			return 0;
-		}
-		else
-			return 1;
 	}
 }

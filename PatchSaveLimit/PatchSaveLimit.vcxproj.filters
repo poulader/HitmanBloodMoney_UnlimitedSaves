@@ -18,5 +18,13 @@
     <ClCompile Include="Patcher.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="OpCodeWriter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="OpCodeWriter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
