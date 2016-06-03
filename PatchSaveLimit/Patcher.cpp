@@ -39,12 +39,7 @@ or succeeds.
 //even though addresses were correct. There is a goofy packer which I'm poking at right now, may have some answers.
 bool SetDebug();
 
-//Taken from https://support.microsoft.com/en-us/kb/131065
-BOOL SetPrivilege(
-	HANDLE hToken,  // token handle 
-	LPCTSTR Privilege,  // Privilege to enable/disable 
-	BOOL bEnablePrivilege  // TRUE to enable. FALSE to disable 
-);
+
 
 
 
@@ -241,72 +236,6 @@ int main()
 
 
 };
-
-//caged from msdn
-bool SetDebug()
-{
-	HANDLE hToken;
-
-	if (!OpenThreadToken(GetCurrentThread(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, FALSE, &hToken))
-	{
-		if (GetLastError() == ERROR_NO_TOKEN)
-		{
-			if (!ImpersonateSelf(SecurityImpersonation))
-				return false;
-
-			if (!OpenThreadToken(GetCurrentThread(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, FALSE, &hToken)) {
-				printf("\nOpenThreadToken failed.\n");
-				return false;
-			}
-		}
-		else
-			return false;
-	}
-
-
-	// enable SeDebugPrivilege
-	if (!SetPrivilege(hToken, SE_DEBUG_NAME, TRUE))
-	{
-		printf("\nSetPrivilege failed.\n");
-
-		// close token handle
-		CloseHandle(hToken);
-
-		// indicate failure
-		return false;
-	}
-
-	return true;
-
-}
-
-//caged from msdn
-BOOL SetPrivilege(
-	HANDLE hToken,  // token handle 
-	LPCTSTR Privilege,  // Privilege to enable/disable 
-	BOOL bEnablePrivilege  // TRUE to enable. FALSE to disable 
-)
-{
-	TOKEN_PRIVILEGES tp = { 0 };
-	// Initialize everything to zero 
-	LUID luid;
-	DWORD cb = sizeof(TOKEN_PRIVILEGES);
-	if (!LookupPrivilegeValue(NULL, Privilege, &luid))
-		return FALSE;
-	tp.PrivilegeCount = 1;
-	tp.Privileges[0].Luid = luid;
-	if (bEnablePrivilege) {
-		tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-	}
-	else {
-		tp.Privileges[0].Attributes = 0;
-	}
-	AdjustTokenPrivileges(hToken, FALSE, &tp, cb, NULL, NULL);
-	if (GetLastError() != ERROR_SUCCESS)
-		return FALSE;
-
-	return TRUE;
-}
 
 
 DWORD doRemoteThreadInstead(DWORD processID, const threadArgsList& args)
@@ -509,16 +438,4 @@ DWORD doRemoteThreadInstead(DWORD processID, const threadArgsList& args)
 		return 0;
 	else
 		return 2;
-}
-
-//This is the function which we copy the opcodes over to the hitman proc and start a thread pointing to it.
-//It does not have any operations which depend on addresses which won't exist in another process. The args are copied over as well.
-DWORD WINAPI ourRemoteThread(LPVOID args)
-{
-	if (args == NULL || args == INVALID_HANDLE_VALUE)
-		return 1;
-	else
-	{
-
-	}
 }
