@@ -40,7 +40,7 @@ typedef struct ORT_ARGS
 #pragma pack(pop,4)
 
 //Size of ourRemoteThread
-const DWORD remoteThreadSize = 0x45;
+const DWORD remoteThreadSize = 0x74;
 
 //if client wants to use a different remote thread function, they should subclass and call protected constructor in initialization list.
 //They must then override all of the virtual functions.

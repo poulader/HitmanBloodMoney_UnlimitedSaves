@@ -3,6 +3,7 @@
 #include <TlHelp32.h>
 #include <tchar.h>
 #include <stdint.h>
+#include "OpCodeWriter.h"
 
 using namespace std;
 
@@ -35,17 +36,6 @@ or succeeds.
 
 */
 
-//Give ourselves debug privileges, was written earlier when trying to use ReadProcessMemory, which was not returning expected values
-//even though addresses were correct. There is a goofy packer which I'm poking at right now, may have some answers.
-bool SetDebug();
-
-
-
-
-
-//Function was written with a global bool to try this method instead, hence the name
-DWORD doRemoteThreadInstead(DWORD processID, const threadArgsList& args);
-
 //The opcode we will write for save patch (unconditional short jmp)
 const uint8_t saveBytesToWrite[]{ 0xEB };
 
@@ -69,20 +59,9 @@ const DWORD saveOpcodeOffset = 0x2776CD;
 //Once everything has been unpacked, this is the offset from the module base to the test for load
 const DWORD loadOpcodeOffset = 0x277689;
 
-
-const DWORD maxOpcodeLength = 255;
-const DWORD maxArgListLength = 10;
-const DWORD memToWriteLength = 0x200;
-const DWORD threadFunctLength = 0x45;
-
-//Fill out a threadArgs structure
-int  createThreadArg(DWORD base, DWORD offset, DWORD length, const uint8_t *opcodes, threadArgs& out_args);
-
+//changed to use OpCodeWriter class
 int main()
 {
-
-	//Make sure the remote thread function is compiled, I have all optimizations disabled but just make sure
-	DWORD result = ourRemoteThread((LPVOID)NULL);
 	
 	//Handles for process + snapshot enumerating
 	HANDLE hProcessSnap;
@@ -92,13 +71,6 @@ int main()
 	PROCESSENTRY32 pe32;
 
 	SIZE_T nBytesWritten = 0;
-
-	if (!SetDebug())
-	{
-		printf("\nCould not obtain debug privilege.\n");
-		Sleep(2000);
-		return -1;
-	}
 
 	while (1)
 	{
@@ -205,29 +177,37 @@ int main()
 				break;
 			}
 
+			OpCodeWriter codeWriter(pe32.th32ProcessID);
 
-
-			bool isSavePatched = false;
-			bool isLoadPatched = false;
-
-			//need to patch save and load (for pro difficulty)
-
-			DWORD retcode = 0;
-			if ( (retcode =doRemoteThreadInstead(pe32.th32ProcessID, (DWORD)moduleEntry.modBaseAddr, saveOpcodeOffset)))
+			if (codeWriter.OpenProcessHandle())
 			{
-				if (retcode != 2)
-					printf("\nRemote thread method failed...\n");
+				printf(_T("Failed to open process.\n"));
 				CloseHandle(hProcessSnap);
 				Sleep(5000);
 				break;
 			}
-			else
+
+			if (codeWriter.WriteOpCodeAtAddress((DWORD)moduleEntry.modBaseAddr + saveOpcodeOffset, sizeof(saveBytesToWrite), saveBytesToWrite))
 			{
-				printf("\ndoremotethread ok.\n");
+				printf(_T("Failed to patch.\n"));
 				CloseHandle(hProcessSnap);
 				Sleep(5000);
 				break;
 			}
+
+			if (codeWriter.WriteOpCodeAtAddress((DWORD)moduleEntry.modBaseAddr + loadOpcodeOffset, sizeof(loadBytesToWrite), loadBytesToWrite))
+			{
+				printf(_T("Failed to patch.\n"));
+				CloseHandle(hProcessSnap);
+				Sleep(5000);
+				break;
+			}
+
+			printf(_T("Patched! Enjoy.\n"));
+
+			CloseHandle(hProcessSnap);
+			Sleep(5000);
+			break;
 
 		}
 
@@ -236,206 +216,3 @@ int main()
 
 
 };
-
-
-DWORD doRemoteThreadInstead(DWORD processID, const threadArgsList& args)
-{
-
-	HANDLE hitmanProc = NULL;
-
-	//make sure args are ok
-	if (processID == 0 || processID == (DWORD)INVALID_HANDLE_VALUE)
-		return 1;
-	else if (args.count == 0 || args.totalLength > maxArgListLength)
-		return 1;
-	else if (args.totalLength > (memToWriteLength / 2))
-		return 1;
-
-	hitmanProc = OpenProcess(PROCESS_ALL_ACCESS, false, processID);
-
-	if (hitmanProc == NULL || hitmanProc == INVALID_HANDLE_VALUE)
-	{
-		printf("\nCouldn't get handle to process.\n");
-		return 1;
-	}
-
-	HANDLE remoteAddr = 0;
-
-	//function we need to run is 0x45 bytes WITH THE CURRENT COMPILER AND LINKER SETTINGS! If they are changed, the size will change.
-	//Also some optimization earlier was making the exported function address point to an entry in a jmp table, so I had to originally
-	//grab offset from jmp and add it to exported function address + 5 bytes.
-	//The exported function now directly points to the function, so we can use the address directly.
-
-	//Figure out how much memory we need
-	DWORD totalMemSize = 0;
-
-	//size of opcodes for thread funct
-	totalMemSize += threadFunctLength;
-
-	//size of arguments
-	totalMemSize += args.totalLength;
-
-	//size of argslist struct, we already have the length of the array of threadargs so subtract the size of the array delcaration
-	totalMemSize += (sizeof(threadArgsList) - sizeof(threadArgs));
-
-	//make sure args will be aligned properly after function
-	DWORD padsize = 0;
-
-	padsize = threadFunctLength % 8;
-
-	if (padsize != 0)
-	{
-		totalMemSize += (8 - padsize);
-	}
-
-
-	//Allocate some memory in the hitman process
-	remoteAddr = (HANDLE)VirtualAllocEx(hitmanProc, NULL, totalMemSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-
-	if (remoteAddr == NULL || remoteAddr == INVALID_HANDLE_VALUE)
-	{
-		printf("\nError allocating memory in hitman proccess.\n");
-		CloseHandle(hitmanProc);
-		return 1;
-	}
-
-	//Get the address of the thread routine we want to run, we are exporting it
-	HMODULE currentModule = GetModuleHandle(NULL);
-
-	if (currentModule == NULL || currentModule == INVALID_HANDLE_VALUE)
-	{
-		printf("\nCould not get handle to self.\n");
-		CloseHandle(hitmanProc);
-		return 1;
-	}
-
-	//Addr of function
-	HANDLE ptrToFunct = GetProcAddress(currentModule, "_ourRemoteThread@4");
-
-	if (ptrToFunct == NULL || ptrToFunct == INVALID_HANDLE_VALUE)
-	{
-		printf("\nError getting function pointer...\n");
-		CloseHandle(hitmanProc);
-		return 1;
-	}
-
-	DWORD nBytesWritten = 0;
-
-	uint8_t *nullarray = new uint8_t[totalMemSize];
-	ZeroMemory(nullarray, sizeof(nullarray));
-
-	//zero the memory first, if the write fails at this point, I'm not going to try and free it, who cares
-	if (!WriteProcessMemory(hitmanProc, remoteAddr, nullarray, totalMemSize, &nBytesWritten))
-	{
-		printf("\nError writing to memory we allocated in hitman process.\n");
-		CloseHandle(hitmanProc);
-		return 1;
-	}
-
-	nBytesWritten = 0;
-
-	//Due to compiler options being changed, we no longer have a jmp redirect to the function. We can directly
-	//use the address from getprocaddress
-
-	//Copy the function bytecode over. The function does not call anything so we don't have to worry about
-	//fixing up any import addresses.
-
-	//Also all automatically generated security things should be disabled or it will try to jmp
-	//to an address that is incorrect in the remote process.
-	if (!WriteProcessMemory(hitmanProc, remoteAddr, (uint8_t*)ptrToFunct, threadFunctLength, &nBytesWritten))
-	{
-		if (nBytesWritten < 0x45)
-		{
-			printf("\nError copying function to hitman proc.\n");
-			CloseHandle(hitmanProc);
-			return 1;
-		}
-	}
-
-	DWORD remoteThreadID = 0;
-
-	//write args to hitman process memory as well
-	HANDLE remoteArgsAddr = (HANDLE)NULL;
-
-	nBytesWritten = 0;
-
-	//We need to make sure args are written at a qword boundary
-	DWORD padAfterFunct = threadFunctLength % 8;
-	DWORD argsAddr = ((DWORD)remoteAddr + threadFunctLength + (8 - padAfterFunct));
-
-	remoteArgsAddr = (HANDLE)argsAddr;
-
-	//Again if we fail to write to memory we allocated, I'm not going to try and free it.
-
-	if (!WriteProcessMemory(hitmanProc, remoteArgsAddr, (threadArgsList*)&args, totalMemSize - (threadFunctLength + (8 - padAfterFunct)), &nBytesWritten))
-	{
-		printf("\nError writing args.\n");
-		CloseHandle(hitmanProc);
-		return 1;
-	}
-
-	//The free/closehandles is repeated a lot, it was in one place originally and I'm too lazy atm to refactor
-
-	HANDLE remoteThreadHandle = NULL;
-	DWORD threadExitCode = 0;
-
-	//Try to start a thread with the entry point being the function we copied over, and the args opinting to the args we copied over
-	if (!(remoteThreadHandle = CreateRemoteThread(hitmanProc, NULL, 0, (THREADPROC)remoteAddr, (LPVOID)remoteArgsAddr, 0, &remoteThreadID)) || remoteThreadHandle == INVALID_HANDLE_VALUE)
-	{
-		printf("\nError starting remote thread.\n");
-		VirtualFreeEx(hitmanProc, remoteAddr, 0x100, MEM_DECOMMIT);
-		CloseHandle(hitmanProc);
-		return 1;
-	}
-
-	Sleep(250);
-
-	//Wait for thread to finish
-	if (!WaitForSingleObject((HANDLE)remoteThreadID, INFINITE))
-	{
-		printf("\nWe were not signalled that remote thread terminated... however the patch might have worked.\n");
-		VirtualFreeEx(hitmanProc, remoteAddr, 0x100, MEM_DECOMMIT);
-		CloseHandle(remoteThreadHandle);
-		CloseHandle(hitmanProc);
-		return 2;
-
-	}
-
-	//See if we succeeded or not. I will change thread routine to return another value if it is already patched,
-	//its too late tonight to re-measure function length.
-	if (!GetExitCodeThread(remoteThreadHandle, (DWORD*)&threadExitCode))
-	{
-		printf("\nWe were unable to retreieve thread return value, game may be paused or minimized. Give it a shot.\n");
-		VirtualFreeEx(hitmanProc, remoteAddr, 0x100, MEM_DECOMMIT);
-		CloseHandle(remoteThreadHandle);
-		CloseHandle(hitmanProc);
-		return 2;
-	}
-	else if (threadExitCode == 0)
-	{
-		printf("\nSuccesfully patched code in memory, infinite saves activated.");
-	}
-	else
-	{
-		printf("\nAlready patched (OK) or opcode not found (BAD). Running steam 1.2 version?\n");
-
-	}
-
-	//Free the memory we allocated earlier
-	if (!VirtualFreeEx(hitmanProc, remoteAddr, 0x100, MEM_DECOMMIT))
-	{
-		printf("\nUnable to free the memory we allocated earlier in hitman process, oh well..");
-	}
-	else
-	{
-		printf("\nFreed memory we allocated earlier.");
-	}
-
-	CloseHandle(remoteThreadHandle);
-	CloseHandle(hitmanProc);
-
-	if (threadExitCode == 0)
-		return 0;
-	else
-		return 2;
-}

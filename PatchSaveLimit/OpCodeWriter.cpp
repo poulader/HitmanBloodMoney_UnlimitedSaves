@@ -147,8 +147,21 @@ int OpCodeWriter::WriteOpCodeAtNextAddress(DWORD length, const uint8_t* opcode)
 	{
 
 		//Check thread return code
-		bytesOfCodeWritten += threadReturnValue;
-		currentAddr = (HANDLE)((DWORD)currentAddr + bytesOfCodeWritten);
+
+		if (threadReturnValue == (DWORD)-1)
+		{
+			AddLogLine(_T("Remote thread received invalid args"));
+		}
+		else if (threadReturnValue != length)
+		{
+			AddLogLine(_T("Remote thread did not write everything requested.\n"));
+
+		}
+		else
+		{
+			bytesOfCodeWritten += threadReturnValue;
+			currentAddr = (HANDLE)((DWORD)currentAddr + bytesOfCodeWritten);
+		}
 		return 0;
 	}
 
@@ -169,7 +182,7 @@ bool OpCodeWriter::WriteRemoteThreadArgs(DWORD length, DWORD addr, const uint8_t
 		return false;
 	}
 
-	targetAddr = (HANDLE)((DWORD)vThreadArgAddr + sizeof(DWORD));
+	targetAddr = (HANDLE)((DWORD)targetAddr + sizeof(DWORD));
 
 	if (!WriteProcessMemory(procHandle, targetAddr, &length, sizeof(DWORD), &bytesWritten))
 	{
@@ -177,7 +190,7 @@ bool OpCodeWriter::WriteRemoteThreadArgs(DWORD length, DWORD addr, const uint8_t
 		return false;
 	}
 
-	targetAddr = (HANDLE)((DWORD)vThreadArgAddr + sizeof(DWORD));
+	targetAddr = (HANDLE)((DWORD)targetAddr + sizeof(DWORD));
 
 	//Write opcode argument to thread args
 	if (!WriteProcessMemory(procHandle, targetAddr, opcodes, length, &bytesWritten))
@@ -185,13 +198,15 @@ bool OpCodeWriter::WriteRemoteThreadArgs(DWORD length, DWORD addr, const uint8_t
 		AddLogLine(_T("Failed to write opcodes to remote args address"));
 		return false;
 	}
+
+	return true;
 };
 
 //todo: make block for result an option they can set
 //in that case also include arbitrary sleep time
 //also include alternate wait time for WaitForsingleObject
 //private implementation routine, 
-int OpCodeWriter::RunRemoteThread(DWORD& threadReturn, bool blockForResult = true)
+int OpCodeWriter::RunRemoteThread(DWORD& threadReturn, bool blockForResult)
 {
 
 	//run remote thread, and then zero the arguments area in remote proc
@@ -255,7 +270,7 @@ int OpCodeWriter::OpenProcessHandle()
 	{
 		return -4;
 	}
-	else if (vAllocAddr == INVALID_HANDLE_VALUE ||  (DWORD)vAllocAddr + sizeOfBlock > 0 ? sizeOfBlock : defaultBlockSize > 0x7FFFFFFF) /* if they specified a specified addr at which to allocate memory, check it*/
+	else if (vAllocAddr == INVALID_HANDLE_VALUE || vAllocAddr != NULL &&  ((DWORD)vAllocAddr + sizeOfBlock > 0 ? sizeOfBlock : defaultBlockSize > 0x7FFFFFFF)) /* if they specified a specified addr at which to allocate memory, check it*/
 	{
 		return -5;
 	}
@@ -291,12 +306,13 @@ int OpCodeWriter::OpenProcessHandle()
 	actualSize = targetSize;
 
 	//Try to allocate some memory in the remote process
-	HANDLE tempAllocAddr = VirtualAllocEx(procHandle, &vAllocAddr, targetSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+	HANDLE tempAllocAddr = VirtualAllocEx(procHandle, vAllocAddr != NULL ? vAllocAddr : NULL, targetSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 
 	//we wont mark state as unrecoverable in this instance, just report that allocation failed.
 	//If they want, they can try changing address and size and trying again.
 	if (tempAllocAddr == INVALID_HANDLE_VALUE || tempAllocAddr == NULL)
 	{
+		DWORD lastError = GetLastError();
 		CloseProcessHandle();
 		ResetStats();
 		state = STATE_CLOSED;
@@ -318,6 +334,7 @@ int OpCodeWriter::OpenProcessHandle()
 
 	//Try to zero out the allocated region
 	uint8_t *zeroBuf = new uint8_t[targetSize];
+	ZeroMemory(zeroBuf, targetSize);
 
 	if (!WriteProcessMemory(procHandle, vAllocAddr, zeroBuf, targetSize, &bytesWritten))
 	{
@@ -413,7 +430,8 @@ bool OpCodeWriter::SetAlignment(DWORD nAlign)
 //here and use writeopcodeatnextaddress
 int OpCodeWriter::SetStartingOpAddr(HANDLE sAddr)
 {
-
+	//todo
+	return -1;
 };
 
 //Get as elevated priveleges as possible
@@ -481,14 +499,26 @@ BOOL OpCodeWriter::SetPrivilege(
 };
 
 
-//This is the function which we copy the opcodes over to the hitman proc and start a thread pointing to it.
-//It does not have any operations which depend on addresses which won't exist in another process. The args are copied over as well.
+//Try to write the arguments
 DWORD WINAPI ourRemoteThread(LPVOID args)
 {
 	if (args == NULL || args == INVALID_HANDLE_VALUE)
-		return 1;
+		return (DWORD)-1;
 	else
 	{
-
+		pORT_ARGS tr_args = (pORT_ARGS)args;
+		if (tr_args == NULL)
+			return (DWORD)-1;
+		else
+		{
+			DWORD startAddr = tr_args->addr;
+			uint8_t *bufPtr = tr_args->buf;
+			DWORD i = 0;
+			for (; i < tr_args->len; i++, bufPtr++)
+			{
+				*(uint8_t*)(startAddr + i) = *bufPtr;
+			}
+			return i;
+		}
 	}
 }
