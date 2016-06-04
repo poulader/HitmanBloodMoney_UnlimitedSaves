@@ -187,6 +187,8 @@ int main()
 				break;
 			}
 
+			Sleep(500);
+
 			if (codeWriter.WriteOpCodeAtAddress((DWORD)moduleEntry.modBaseAddr + saveOpcodeOffset, sizeof(saveBytesToWrite), saveBytesToWrite))
 			{
 				printf(_T("Failed to patch.\n"));
@@ -195,6 +197,8 @@ int main()
 				break;
 			}
 
+			Sleep(500);
+
 			if (codeWriter.WriteOpCodeAtAddress((DWORD)moduleEntry.modBaseAddr + loadOpcodeOffset, sizeof(loadBytesToWrite), loadBytesToWrite))
 			{
 				printf(_T("Failed to patch.\n"));
@@ -202,6 +206,8 @@ int main()
 				Sleep(5000);
 				break;
 			}
+
+			Sleep(500);
 
 			printf(_T("Patched! Enjoy.\n"));
 

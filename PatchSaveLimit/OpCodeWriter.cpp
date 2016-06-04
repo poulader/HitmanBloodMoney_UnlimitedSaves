@@ -160,7 +160,7 @@ int OpCodeWriter::WriteOpCodeAtNextAddress(DWORD length, const uint8_t* opcode)
 		else
 		{
 			bytesOfCodeWritten += threadReturnValue;
-			currentAddr = (HANDLE)((DWORD)currentAddr + bytesOfCodeWritten);
+			currentAddr = (HANDLE)((DWORD)currentAddr + threadReturnValue);
 		}
 		return 0;
 	}
