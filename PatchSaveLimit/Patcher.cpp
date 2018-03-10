@@ -61,11 +61,6 @@ const uint8_t loadBytesToWrite[]{ 0x31, 0xFF };
 //original instructions before and at load offset.
 const uint8_t loadBytesToRead[]
 {
-	0xe8,
-	0x3d,
-	0x87,
-	0x03,
-	0x00,
 	0x8a,
 	0x96,
 	0xc4,
