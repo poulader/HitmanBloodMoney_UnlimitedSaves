@@ -234,7 +234,7 @@ int main()
 
 			ZeroMemory(&queryMem, sizeof(MEMORY_BASIC_INFORMATION));
 
-			SIZE_T returnedByteCount = VirtualQueryEx(codeWriter.GetProcessHandle(), (void*)((DWORD)moduleEntry.modBaseAddr + saveOpcodeOffset), &queryMem, sizeof(MEMORY_BASIC_INFORMATION));
+			SIZE_T returnedByteCount = VirtualQueryEx(codeWriter.GetProcessHandle(), (void*)((DWORD)moduleEntry.modBaseAddr + saveLoadSectionBase), &queryMem, sizeof(MEMORY_BASIC_INFORMATION));
 
 			if (returnedByteCount == 0)
 			{
@@ -242,6 +242,20 @@ int main()
 				CloseHandle(hProcessSnap);
 				Sleep(5000);
 				break;
+			}
+
+			if ((queryMem.Protect & PAGE_EXECUTE_READWRITE) != PAGE_EXECUTE_READWRITE)
+			{
+				DWORD oldProtect = 0;
+				BOOL didSucceed = VirtualProtectEx(codeWriter.GetProcessHandle(), (void*)((DWORD)moduleEntry.modBaseAddr + saveLoadSectionBase), 1, PAGE_EXECUTE_READWRITE, &oldProtect);
+
+				if (!didSucceed)
+				{
+					printf(_T("Failed changing access protections on target range.\n"));
+					CloseHandle(hProcessSnap);
+					Sleep(5000);
+					break;
+				}
 			}
 
 			byte readSaveMemoryBuf[0x2000];
@@ -334,27 +348,26 @@ bool LazyPatternMatch(BYTE* nTargetBuf, SIZE_T nTargetBufLen, BYTE* nPatternMatc
 
 	DWORD stopSearchPoint = nTargetBufLen - nPatternMatchLen;
 
-	bool foundPattern = true;
+	bool foundPattern = false;
 
 	DWORD patternStart = 0;
 
 	for (; patternStart <= stopSearchPoint; patternStart++)
 	{
-		foundPattern = true;
 
-		for (DWORD j = 0; j < sizeof(nPatternMatchLen); j++)
+		for (DWORD j = 0; j < nPatternMatchLen; j++)
 		{
 			if (nTargetBuf[patternStart + j] != nPatternMatch[j])
 			{
 				foundPattern = false;
 				break;
 			}
-		}
-
-		if (foundPattern)
-		{
-			out_nPatternStartAddress = patternStart;
-			break;
+			else if (j == nPatternMatchLen - 1)
+			{
+				foundPattern = true;
+				out_nPatternStartAddress = patternStart;
+				return foundPattern;
+			}
 		}
 	}
 
